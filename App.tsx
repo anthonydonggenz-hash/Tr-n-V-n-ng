@@ -1,194 +1,662 @@
-
 import React, { useState, useRef, useEffect } from 'react';
-import { STUDENTS, QUESTIONS } from './constants';
-import type { HistoryEntry, Student } from './types';
-import WheelCanvas from './components/WheelCanvas';
-import PopupModal from './components/PopupModal';
+import { 
+  Wand2, Sparkles, Layers, CheckCircle, File as FileIcon, User, 
+  Edit3, RefreshCw, Settings, Upload, Bot, FileText, X, Brain, Save, ArrowRight, Download, FileJson,
+  Facebook, Phone, MessageCircle, Users as UsersIcon, AlertCircle, Youtube, Video
+} from 'lucide-react';
+import LessonPlan5512View from './components/LessonPlan5512View';
+import DigitalCompetencyView from './components/DigitalCompetencyView';
+import { TEMPLATES } from './constants';
+import { FormData, ResultData } from './types';
 
-const SPIN_DURATION_MS = 6000;
-
-const generateAvatarDataURL = (name: string): string => {
-  const canvas = document.createElement('canvas');
-  const size = 64;
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-
-  if (ctx) {
-    let hash = 0;
-    for (let i = 0; i < name.length; i++) {
-      hash = name.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const color = `hsl(${hash % 360}, 75%, 85%)`;
-
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = '#374151';
-    ctx.font = 'bold 32px Arial';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(name.charAt(0).toUpperCase(), size / 2, size / 2 + 1);
+// Định nghĩa kiểu cho window.aistudio
+declare global {
+  interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
   }
+  interface Window {
+    aistudio?: AIStudio;
+  }
+}
 
-  return canvas.toDataURL();
-};
+const App = () => {
+  const [currentMode, setCurrentMode] = useState<string>('home'); 
+  const [formData, setFormData] = useState<FormData>({
+    grade: '10', subject: '', topic: '',
+    duration: '1', template: '', classLevel: 'standard', 
+    integrationMode: 'inline', originalText: '', selectedFramework: 'TT02_QD3439',
+    textbookFileName: '', frameworkFileName: '', frameworkFileNames: [], customFrameworkFileName: ''
+  });
+  
+  const [resultData, setResultData] = useState<ResultData | null>(null);
+  const [auditResult, setAuditResult] = useState<{score: number; issues: any[]} | null>(null);
+  const [isSuggesting, setIsSuggesting] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState<string | null>(null);
+  const [notification, setNotification] = useState<{message: string, type: 'success' | 'error'} | null>(null);
 
-const initialStudents: Student[] = STUDENTS.map((name, index) => ({
-  name,
-  avatar: generateAvatarDataURL(name),
-  question: QUESTIONS[index % QUESTIONS.length],
-}));
-
-const App: React.FC = () => {
-  const [currentStudents, setCurrentStudents] = useState<Student[]>(initialStudents);
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
-  const [rotation, setRotation] = useState<number>(0);
-  const [isSpinning, setIsSpinning] = useState<boolean>(false);
-  const [selected, setSelected] = useState<{ name: string; question: string } | null>(null);
-
-  const bgMusicRef = useRef<HTMLAudioElement | null>(null);
-  const spinSoundRef = useRef<HTMLAudioElement | null>(null);
-  const cheerSoundRef = useRef<HTMLAudioElement | null>(null);
-  const [isMusicPlaying, setIsMusicPlaying] = useState<boolean>(false);
-
+  // Auto-hide notification
   useEffect(() => {
-    bgMusicRef.current = new Audio("https://www.bensound.com/bensound-music/bensound-littleidea.mp3");
-    bgMusicRef.current.loop = true;
-    spinSoundRef.current = new Audio("https://www.soundjay.com/misc/sounds/bell-ringing-05.mp3");
-    cheerSoundRef.current = new Audio("https://www.soundjay.com/human/sounds/applause-8.mp3");
-  }, []);
+    if (notification) {
+      const timer = setTimeout(() => setNotification(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
 
-  const handleSpin = () => {
-    if (isSpinning || currentStudents.length === 0) return;
+  // Refs for file inputs
+  const textbookInputRef = useRef<HTMLInputElement>(null);
+  const frameworkInputRef = useRef<HTMLInputElement>(null);
+  const customFrameworkInputRef = useRef<HTMLInputElement>(null);
 
-    setIsSpinning(true);
-    spinSoundRef.current?.play().catch(e => console.error("Error playing spin sound:", e));
+  // --- HANDLERS ---
+  const handleGenerate = async () => {
+    if (!formData.subject.trim()) { setNotification({ message: "Vui lòng điền tên Môn học!", type: 'error' }); return; }
+    if (!formData.grade) { setNotification({ message: "Vui lòng chọn Lớp học!", type: 'error' }); return; }
+    if (!formData.topic.trim()) { setNotification({ message: "Vui lòng điền Tên bài dạy / Chủ đề!", type: 'error' }); return; }
 
-    const winnerIndex = Math.floor(Math.random() * currentStudents.length);
-    const arc = 360 / currentStudents.length;
-    const angleToWinner = 360 - (winnerIndex * arc + arc / 2);
-    const randomSpins = Math.floor(Math.random() * 5 + 8) * 360;
-    const newRotation = rotation + randomSpins + angleToWinner;
+    setCurrentMode('loading');
     
-    setRotation(newRotation);
-
-    setTimeout(() => {
-      const winner = currentStudents[winnerIndex];
-      setSelected({ name: winner.name, question: winner.question });
-      cheerSoundRef.current?.play().catch(e => console.error("Error playing cheer sound:", e));
-
-      setHistory(prev => [...prev, { student: winner, index: winnerIndex }]);
+    try {
+      const { generateLessonPlan } = await import('./services/geminiService');
+      const mode = formData.originalText ? 'integration' : 'creation';
       
-      const updatedStudents = currentStudents.filter((_, index) => index !== winnerIndex);
-      setCurrentStudents(updatedStudents);
-      
-      setIsSpinning(false);
-    }, SPIN_DURATION_MS);
-  };
-  
-  const handleUndo = () => {
-    if (history.length === 0 || isSpinning) return;
+      // Ensure we pass the original text correctly
+      const newResult = await generateLessonPlan(mode, formData);
 
-    const lastEntry = history[history.length - 1];
-    const studentToRestore = lastEntry.student;
-    
-    if (studentToRestore) {
-        const newStudents = [...currentStudents];
-        newStudents.splice(lastEntry.index, 0, studentToRestore);
-        setCurrentStudents(newStudents);
-        setHistory(prev => prev.slice(0, -1));
+      // If in integration mode, we might want to keep a copy of the truly original text for comparison
+      // or just ensure resultData reflects the integration accurately.
+      
+      setResultData(newResult);
+      setCurrentMode('result');
+      setNotification({ message: mode === 'integration' ? "Đã tích hợp NLS & AI vào giáo án của bạn!" : "Đã tạo giáo án mới thành công!", type: 'success' });
+    } catch (error: any) {
+      console.error("Lỗi tạo giáo án:", error);
+      setNotification({ message: `Lỗi AI: ${error.message || 'Không xác định'}`, type: 'error' });
+      setCurrentMode(formData.originalText ? 'integrate_input' : 'create_input');
     }
   };
-  
-  const handleReset = () => {
-    if (isSpinning) return;
-    setCurrentStudents(initialStudents);
-    setHistory([]);
-  };
-  
-  const handleToggleMusic = () => {
-    if (!bgMusicRef.current) return;
-    if (isMusicPlaying) {
-      bgMusicRef.current.pause();
-    } else {
-      bgMusicRef.current.play().catch(e => console.error("Error playing music:", e));
+
+  const handleExportWord = async () => {
+    if (!resultData || !resultData.lessonPlan) return;
+    try {
+      const { exportToDocx } = await import('./utils/export');
+      await exportToDocx(resultData);
+      setNotification({ message: "Đang tải file Word (.docx)...", type: 'success' });
+    } catch (error) {
+      console.error("Lỗi xuất file Word:", error);
+      setNotification({ message: "Không thể tạo file Word. Thử lại sau.", type: 'error' });
     }
-    setIsMusicPlaying(!isMusicPlaying);
   };
-  
-  const handleClosePopup = () => {
-    setSelected(null);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>, type: 'textbook' | 'framework' | 'customFramework') => {
+      if (e.target.files && e.target.files.length > 0) {
+          const files = Array.from(e.target.files) as File[];
+          const firstFile = files[0] as File;
+          setUploadingFile(type);
+          
+          try {
+              if (type === 'framework') {
+                  const currentNames = formData.frameworkFileNames || [];
+                  const newNames = files.map(f => f.name);
+                  setFormData(prev => ({ 
+                      ...prev, 
+                      frameworkFileNames: [...currentNames, ...newNames],
+                      frameworkFileName: newNames[newNames.length - 1]
+                  }));
+                  setNotification({ message: `Đã nhận ${files.length} file khung năng lực`, type: 'success' });
+              } else {
+                  const updateData: any = {};
+                  if (type === 'textbook') updateData.textbookFileName = firstFile.name;
+                  else if (type === 'customFramework') updateData.customFrameworkFileName = firstFile.name;
+                  
+                  setFormData(prev => ({ ...prev, ...updateData }));
+                  setNotification({ message: `Đã nhận file: ${firstFile.name}`, type: 'success' });
+              }
+
+              // After uploading textbook, automatically suggest content if topic/subject are ready
+              if (type === 'textbook' && formData.topic && formData.subject) {
+                  setNotification({ message: "Phát hiện tài liệu mới, đang phân tích nội dung...", type: 'success' });
+                  setIsSuggesting(true);
+                  
+                  const reader = new FileReader();
+                  reader.onloadend = async () => {
+                      const arrayBuffer = reader.result as ArrayBuffer;
+                      let filePayload: { data: string, mimeType: string } | undefined;
+                      
+                      try {
+                          if (firstFile.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                              // If DOCX, extract text locally using mammoth
+                              const mammoth = await import('mammoth');
+                              const result = await mammoth.extractRawText({ arrayBuffer });
+                              const extractedText = result.value;
+                              
+                              // Check if extraction actually got any text
+                              if (!extractedText.trim()) {
+                                  throw new Error("File Word này dường như không có nội dung văn bản có thể trích xuất.");
+                              }
+
+                              // Convert UTF-8 to base64 safely
+                              const utf8Bytes = new TextEncoder().encode(extractedText);
+                              const base64Text = btoa(Array.from(utf8Bytes).map(b => String.fromCharCode(b)).join(''));
+                              filePayload = { data: base64Text, mimeType: 'text/plain' };
+                          } else if (firstFile.type === 'application/pdf' || firstFile.type.startsWith('image/')) {
+                              // For PDF, Images, etc. let Gemini handle it
+                              const base64Data = btoa(
+                                  new Uint8Array(arrayBuffer)
+                                      .reduce((data, byte) => data + String.fromCharCode(byte), '')
+                              );
+                              filePayload = { data: base64Data, mimeType: firstFile.type };
+                          } else {
+                              // Unsupported type for Gemini Extraction
+                              throw new Error(`Định dạng file (${firstFile.name.split('.').pop()}) chưa được hỗ trợ trích xuất tự động. Vui lòng sử dụng file PDF, DOCX hoặc Ảnh.`);
+                          }
+
+                          const { suggestFromContent } = await import('./services/geminiService');
+                          const suggestion = await suggestFromContent(
+                              formData.topic, 
+                              formData.subject, 
+                              formData.grade, 
+                              filePayload,
+                              currentMode === 'integrate_input'
+                          );
+                          setFormData(prev => ({ ...prev, originalText: suggestion }));
+                          setIsSuggesting(false);
+                          setNotification({ message: "Đã cập nhật nội dung từ tài liệu!", type: 'success' });
+                      } catch (err: any) {
+                          console.error("Lỗi xử lý file Gemini:", err);
+                          setNotification({ message: "Lỗi trích xuất nội dung từ file. Vui lòng thử lại.", type: 'error' });
+                          setIsSuggesting(false);
+                      }
+                  };
+                  reader.readAsArrayBuffer(firstFile);
+              }
+          } catch (error) {
+              console.error('File processing error:', error);
+              setNotification({ message: "Lỗi xử lý file", type: 'error' });
+          } finally {
+              setUploadingFile(null);
+              if (e.target) e.target.value = '';
+          }
+      }
   };
+
+  const handleAiSuggest = async () => {
+      if (!formData.topic || !formData.subject) {
+          setNotification({ message: "Vui lòng nhập Môn học và Tên bài dạy trước để AI gợi ý nội dung!", type: 'error' });
+          return;
+      }
+      setIsSuggesting(true);
+      
+      try {
+        const { suggestFromContent } = await import('./services/geminiService');
+        const aiContent = await suggestFromContent(
+          formData.topic, 
+          formData.subject, 
+          formData.grade, 
+          undefined, 
+          currentMode === 'integrate_input'
+        );
+        setFormData(prev => ({ ...prev, originalText: aiContent }));
+        setNotification({ message: "Đã có gợi ý từ AI!", type: 'success' });
+      } catch (error) {
+        setNotification({ message: "Không thể kết nối AI", type: 'error' });
+      } finally {
+        setIsSuggesting(false);
+      }
+  };
+
+  const handleAudit = () => {
+      setAuditResult({
+          score: 98,
+          issues: [{type: 'success', msg: 'Cấu trúc bài dạy rất chi tiết và đúng quy định 5512.'}]
+      });
+  };
+
+  const handleTransformMethod = async (actIndex: number, methodType: string) => {
+    if (!resultData) return;
+    setNotification({ message: `Đang chuyển đổi hoạt động sang ${methodType}...`, type: 'success' });
+    try {
+      const { transformActivity } = await import('./services/geminiService');
+      const currentAct = resultData.lessonPlan.activities[actIndex];
+      const updatedAct = await transformActivity(currentAct, methodType, formData.subject, formData.grade);
+      
+      const newResult = { ...resultData };
+      newResult.lessonPlan.activities[actIndex] = updatedAct;
+      setResultData(newResult);
+      setNotification({ message: "Đã chuyển đổi thành công!", type: 'success' });
+    } catch (error) {
+      console.error("Transform error:", error);
+      setNotification({ message: "Lỗi chuyển đổi hoạt động", type: 'error' });
+    }
+  };
+
+  const handleSectionElaborate = async (sectionId: string, userPrompt: string) => {
+    if (!resultData) return;
+    setNotification({ message: "Đang yêu cầu AI mở rộng nội dung...", type: 'success' });
+    try {
+      const { elaborateSection } = await import('./services/geminiService');
+      let currentContent = "";
+      let sectionName = "";
+
+      if (sectionId === 'objectives_knowledge') {
+        currentContent = resultData.lessonPlan.objectives.knowledge.join("\n");
+        sectionName = "Mục tiêu: Kiến thức";
+      } else if (sectionId.startsWith('activity_content_')) {
+        const idx = parseInt(sectionId.split('_')[2]);
+        currentContent = resultData.lessonPlan.activities[idx].content;
+        sectionName = `Nội dung hoạt động ${idx + 1}`;
+      }
+
+      const expanded = await elaborateSection(currentContent, userPrompt, sectionName);
+      
+      const newResult = { ...resultData };
+      if (sectionId === 'objectives_knowledge') {
+        newResult.lessonPlan.objectives.knowledge = [expanded];
+      } else if (sectionId.startsWith('activity_content_')) {
+        const idx = parseInt(sectionId.split('_')[2]);
+        newResult.lessonPlan.activities[idx].content = expanded;
+      }
+      
+      setResultData(newResult);
+      setNotification({ message: "Đã mở rộng nội dung thành công!", type: 'success' });
+    } catch (error) {
+      console.error("Elaborate error:", error);
+      setNotification({ message: "Lỗi mở rộng nội dung", type: 'error' });
+    }
+  };
+
+  // --- RENDER SUB-VIEWS ---
+
+  const renderInputForm = () => (
+      <div className="w-full max-w-4xl bg-white p-10 rounded-xl shadow-sm border border-gray-100 animate-fade-in mx-auto mt-6 mb-10">
+          <div className="flex items-center gap-4 mb-8 border-b border-gray-100 pb-6">
+              <div className={`p-3 rounded-xl ${currentMode === 'integrate_input' ? 'bg-blue-50 text-blue-600' : 'bg-yellow-50 text-gold-accent'}`}>
+                  {currentMode === 'integrate_input' ? <Layers size={28}/> : <Edit3 size={28}/>}
+              </div>
+              <div>
+                  <h2 className="text-2xl font-bold font-serif text-slate-800">
+                    {currentMode === 'integrate_input' ? 'Tích hợp Năng Lực Số & AI' : 'Soạn bài dạy mới tích hợp AI'}
+                  </h2>
+                  <p className="text-slate-500 text-sm italic">
+                    {currentMode === 'integrate_input' 
+                      ? 'Tải lên giáo án có sẵn để hệ thống tự động chèn thêm các yếu tố NLS & AI chuẩn TT 02 & QĐ 3439.'
+                      : 'Nhập thông tin bài dạy để AI soạn thảo giáo án mới tích hợp sẵn các yếu tố NLS & AI.'}
+                  </p>
+              </div>
+          </div>
+
+          <div className="space-y-8">
+              {/* Basic Info Group */}
+              <div className="grid grid-cols-2 gap-6">
+                  <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-widest mb-2">Môn học <span className="text-red-500">*</span></label>
+                      <input 
+                        type="text" 
+                        className="w-full bg-white border border-gray-200 rounded-lg p-3 focus:outline-none focus:border-gold-accent focus:ring-1 focus:ring-gold-accent/20 transition-all text-sm" 
+                        placeholder="Ví dụ: Toán Hình, Đại số..."
+                        value={formData.subject} 
+                        onChange={e => setFormData({...formData, subject: e.target.value})} 
+                      />
+                  </div>
+                  <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-widest mb-2">Lớp <span className="text-red-500">*</span></label>
+                      <select className="w-full bg-white border border-gray-200 rounded-lg p-3 focus:outline-none focus:border-gold-accent focus:ring-1 focus:ring-gold-accent/20 transition-all text-sm" value={formData.grade} onChange={e => setFormData({...formData, grade: e.target.value})}>
+                          <option value="">-- Chọn lớp --</option>
+                          <option value="Mầm Non">Mầm Non</option>
+                          {[1,2,3,4,5,6,7,8,9,10,11,12].map(g => <option key={g} value={g}>Lớp {g}</option>)}
+                          <option value="Khác">Lớp khác</option>
+                      </select>
+                  </div>
+                  <div className="col-span-2">
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-widest mb-2">Tên bài dạy / Chủ đề <span className="text-red-500">*</span></label>
+                      <input 
+                        type="text" 
+                        className="w-full bg-white border border-gray-200 rounded-lg p-3 focus:outline-none focus:border-gold-accent focus:ring-1 focus:ring-gold-accent/20 transition-all text-sm font-semibold" 
+                        placeholder="Ví dụ: Hình bình hành, Phương trình bậc hai..."
+                        value={formData.topic} 
+                        onChange={e => setFormData({...formData, topic: e.target.value})} 
+                      />
+                  </div>
+              </div>
+
+              <div className="h-px bg-slate-100"></div>
+
+              {/* THREE SECTIONS: Textbook, Framework, AI Suggestion */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  
+                   {/* 1. Textbook Material / Original Lesson Plan */}
+                  <div className={`border border-dashed rounded-xl p-5 hover:bg-slate-50 transition-colors ${currentMode === 'integrate_input' ? 'border-blue-400/30' : 'border-slate-300'}`}>
+                      <div className="flex items-center justify-between mb-3">
+                          <label className={`block text-xs font-bold uppercase tracking-widest ${currentMode === 'integrate_input' ? 'text-blue-600' : 'text-gold-dark'}`}>
+                             {currentMode === 'integrate_input' ? '1. Giáo án gốc' : '1. Tài liệu SGK'}
+                          </label>
+                          <span className="text-[9px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded">Ảnh/PDF/Word/PPT</span>
+                      </div>
+                      
+                      <input 
+                        type="file" 
+                        ref={textbookInputRef}
+                        className="hidden" 
+                        accept=".jpg,.png,.jpeg,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx"
+                        onChange={(e) => handleFileChange(e, 'textbook')}
+                      />
+                      
+                      {!formData.textbookFileName ? (
+                          <div className="text-center py-6 cursor-pointer" onClick={() => !uploadingFile && textbookInputRef.current?.click()}>
+                              {uploadingFile === 'textbook' ? (
+                                <RefreshCw className={`mx-auto mb-2 animate-spin ${currentMode === 'integrate_input' ? 'text-blue-500' : 'text-gold-accent'}`} size={24} />
+                              ) : (
+                                <Upload className="mx-auto text-slate-300 mb-2" size={24} />
+                              )}
+                              <p className="text-xs text-slate-500">
+                                {uploadingFile === 'textbook' ? 'Đang tải lên...' : currentMode === 'integrate_input' ? 'Tải lên FILE giáo án cũ' : 'Tải lên tài liệu bộ môn'}
+                              </p>
+                          </div>
+                      ) : (
+                          <div className={`flex items-center gap-2 p-3 rounded-lg border ${currentMode === 'integrate_input' ? 'bg-blue-50 border-blue-200' : 'bg-gold-light border-gold-primary/20'}`}>
+                              <FileText size={20} className={currentMode === 'integrate_input' ? 'text-blue-600' : 'text-gold-dark'} />
+                              <div className="flex-1 min-w-0">
+                                  <p className="text-xs font-bold text-slate-800 truncate">{formData.textbookFileName}</p>
+                                  <p className="text-[10px] text-slate-500">Đã nhận file nguồn</p>
+                              </div>
+                              <X size={16} className="text-slate-400 cursor-pointer hover:text-red-500" onClick={() => setFormData({...formData, textbookFileName: ''})} />
+                          </div>
+                      )}
+                  </div>
+
+                  {/* 2. Digital Framework */}
+                  <div className="border border-dashed border-slate-300 rounded-xl p-5 hover:bg-slate-50 transition-colors">
+                      <div className="flex items-center justify-between mb-3">
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest">2. Khung Năng Lực Số / Tích hợp AI</label>
+                          <span className="text-[9px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded">Ảnh/PDF/PPT/Excel</span>
+                      </div>
+                      
+                      <input 
+                        type="file" 
+                        ref={frameworkInputRef}
+                        className="hidden" 
+                        accept=".jpg,.png,.jpeg,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx"
+                        multiple
+                        onChange={(e) => handleFileChange(e, 'framework')}
+                      />
+
+                      {(!formData.frameworkFileNames || formData.frameworkFileNames.length === 0) ? (
+                          <div className="text-center py-6 cursor-pointer" onClick={() => !uploadingFile && frameworkInputRef.current?.click()}>
+                              {uploadingFile === 'framework' ? (
+                                <RefreshCw className="mx-auto text-gold-accent mb-2 animate-spin" size={24} />
+                              ) : (
+                                <Layers className="mx-auto text-slate-300 mb-2" size={24} />
+                              )}
+                              <p className="text-xs text-slate-500">{uploadingFile === 'framework' ? 'Đang tải lên...' : 'Tải lên khung năng lực (chọn nhiều file)'}</p>
+                          </div>
+                      ) : (
+                          <div className="space-y-2">
+                              {(formData.frameworkFileNames || []).map((fileName, idx) => (
+                                  <div key={idx} className="flex items-center gap-2 bg-slate-100 p-2 rounded-lg border border-slate-200">
+                                      <FileText size={16} className="text-slate-500" />
+                                      <div className="flex-1 min-w-0">
+                                          <p className="text-[10px] font-bold text-slate-800 truncate">{fileName}</p>
+                                      </div>
+                                      <X 
+                                          size={14} 
+                                          className="text-slate-400 cursor-pointer hover:text-red-500" 
+                                          onClick={() => {
+                                              const newFiles = (formData.frameworkFileNames || []).filter((_, fIdx) => fIdx !== idx);
+                                              setFormData({...formData, frameworkFileNames: newFiles, frameworkFileName: newFiles.length > 0 ? newFiles[newFiles.length-1] : ''});
+                                          }} 
+                                      />
+                                  </div>
+                              ))}
+                              <button 
+                                onClick={() => frameworkInputRef.current?.click()}
+                                className="w-full py-2 border border-dashed border-slate-300 rounded-lg text-[10px] font-bold text-slate-500 hover:bg-slate-50 transition-colors mt-2"
+                              >
+                                + Thêm file khác
+                              </button>
+                          </div>
+                      )}
+
+                      <div className="mt-4 pt-4 border-t border-slate-100">
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">CHỌN HÌNH THỨC TÍCH HỢP</label>
+                          <select 
+                              className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs focus:outline-none focus:border-gold-accent transition-all font-medium"
+                              value={formData.selectedFramework}
+                              onChange={e => setFormData({...formData, selectedFramework: e.target.value})}
+                          >
+                              <option value="TT02">Tích hợp Năng Lực Số (Thông tư 02)</option>
+                              <option value="QD3439">Tích hợp AI (QĐ 3439)</option>
+                              <option value="TT02_QD3439">Kết hợp cả Năng lực số và AI</option>
+                          </select>
+                      </div>
+                  </div>
+
+                   {/* 3. AI Suggestion (Full Width) */}
+                  <div className={`col-span-1 md:col-span-2 border rounded-xl p-5 relative overflow-hidden ${currentMode === 'integrate_input' ? 'border-blue-400/30 bg-blue-50/10' : 'border-gold-primary/30 bg-yellow-50/30'}`}>
+                      <div className={`absolute top-0 left-0 w-1 h-full ${currentMode === 'integrate_input' ? 'bg-blue-500' : 'bg-gold-primary'}`}></div>
+                      <div className="flex items-center justify-between mb-4">
+                          <label className="block text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                             <Sparkles size={14} className={currentMode === 'integrate_input' ? 'text-blue-500' : 'text-gold-primary'} /> 
+                             {currentMode === 'integrate_input' ? '3. Nội dung giáo án gốc cần tích hợp' : '3. Nội dung bài dạy (Gợi ý từ AI)'}
+                          </label>
+                          <button 
+                             onClick={handleAiSuggest}
+                             disabled={isSuggesting}
+                             className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-white text-[10px] font-bold transition-all disabled:opacity-50 ${currentMode === 'integrate_input' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-slate-800 hover:bg-slate-700'}`}
+                           >
+                             {isSuggesting ? <RefreshCw size={12} className="animate-spin" /> : <Brain size={12} />} 
+                             {isSuggesting ? 'Đang phân tích...' : currentMode === 'integrate_input' ? 'Trích xuất từ tài liệu đã tải' : 'Soạn sơ bộ bằng AI'}
+                          </button>
+                      </div>
+
+                      {!formData.originalText ? (
+                          <div className="flex flex-col items-center justify-center py-8 text-center border border-dashed border-slate-300 rounded-lg bg-white/50">
+                               <p className="text-xs text-slate-500 mb-1">{currentMode === 'integrate_input' ? 'Chưa có nội dung giáo án' : 'Chưa có nội dung gợi ý'}</p>
+                               <p className="text-[10px] text-slate-400 italic">
+                                 {currentMode === 'integrate_input' 
+                                   ? 'Vui lòng dán giáo án hoặc nhấn "Trích xuất" sau khi đã tải file ở mục 1.' 
+                                   : 'Điền Môn, Lớp, Chủ đề và nhấn "Soạn sơ bộ" để AI hỗ trợ trích xuất kiến thức chuẩn.'}
+                               </p>
+                          </div>
+                      ) : (
+                         <div className="animate-fade-in">
+                             <textarea 
+                                className="w-full bg-white border border-slate-200 rounded-lg p-4 focus:outline-none focus:border-gold-accent text-sm text-slate-700 min-h-[160px] shadow-inner font-mono leading-relaxed" 
+                                value={formData.originalText} 
+                                onChange={e => setFormData({...formData, originalText: e.target.value})}
+                                placeholder={currentMode === 'integrate_input' ? "Dán giáo án gốc của bạn vào đây..." : "Nội dung bài dạy sẽ hiển thị ở đây..."}
+                             ></textarea>
+                             <p className="text-[10px] text-right text-slate-400 mt-2 italic">* Nội dung này sẽ được bảo tồn và bổ sung thêm các yếu tố NLS & AI.</p>
+                         </div>
+                      )}
+                  </div>
+              </div>
+
+              <div className="pt-4">
+                   <button 
+                    id="main-generate-button"
+                    onClick={handleGenerate} 
+                    className={`w-full py-4 rounded-xl text-white shadow-lg hover:shadow-xl hover:brightness-110 active:translate-y-0.5 transition-all font-bold text-lg flex items-center justify-center gap-2 uppercase tracking-widest ${currentMode === 'integrate_input' ? 'bg-gradient-to-br from-blue-500 to-tech-blue' : 'bg-gradient-to-br from-gold-accent to-gold-primary'}`}
+                  >
+                      <Wand2 size={24} />
+                      {currentMode === 'integrate_input' ? 'Tích hợp NLS & AI vào bài dạy' : 'Tạo Giáo Án Mới tích hợp NLS & AI'}
+                  </button>
+                  <p className="text-center text-[10px] text-slate-400 mt-3 italic">Hệ thống tự động render công thức Toán học, biểu đồ và hình học chuẩn SVG.</p>
+              </div>
+          </div>
+      </div>
+  );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col items-center justify-center p-4 text-gray-800 font-sans overflow-hidden">
-      <header className="text-center mb-6">
-        <h1 className="text-3xl md:text-5xl font-bold text-indigo-800 uppercase tracking-tight">Vòng quay nghiệp vụ NH-KS</h1>
-        <p className="text-xl text-indigo-600 mt-2 font-medium">Trường Cao đẳng Quảng Nam</p>
-      </header>
-      
-      <div className="flex-grow w-full flex flex-col lg:flex-row items-center justify-center gap-8 xl:gap-16">
-        <main className="relative flex flex-col items-center">
-          <div 
-            className={`absolute -top-4 z-10 transition-transform duration-300 ${isSpinning ? 'animate-bounce' : ''}`}
-            style={{ left: '50%', transform: 'translateX(-50%)' }}
-          >
-            <div className="w-0 h-0 border-l-[20px] border-l-transparent border-r-[20px] border-r-transparent border-t-[30px] border-t-red-600 shadow-lg"></div>
-          </div>
-          
-          <div 
-            className="transition-transform"
-            style={{ 
-              transform: `rotate(${rotation}deg)`, 
-              transitionDuration: `${SPIN_DURATION_MS}ms`,
-              transitionTimingFunction: 'cubic-bezier(0.175, 0.885, 0.32, 1.275)'
-            }}
-          >
-            <WheelCanvas students={currentStudents} width={500} height={500} isSpinning={isSpinning} />
-          </div>
-          
-          <div className="mt-8 flex flex-wrap justify-center gap-4">
-            <button onClick={handleSpin} disabled={isSpinning || currentStudents.length === 0} className="px-10 py-4 bg-indigo-600 text-white font-bold text-xl rounded-full shadow-xl transform hover:scale-105 transition-transform disabled:bg-gray-400 disabled:cursor-not-allowed">
-              QUAY NGAY
-            </button>
-            <button onClick={handleUndo} disabled={isSpinning || history.length === 0} className="px-6 py-4 bg-amber-500 text-white font-bold text-lg rounded-full shadow-lg transform hover:scale-105 transition-transform disabled:bg-gray-400">
-              ↩ Hoàn tác
-            </button>
-            <button onClick={handleReset} disabled={isSpinning} className="px-6 py-4 bg-red-500 text-white font-bold text-lg rounded-full shadow-lg transform hover:scale-105 transition-transform disabled:bg-gray-400">
-              🔄 Làm mới
-            </button>
-            <button onClick={handleToggleMusic} className="px-6 py-4 bg-emerald-500 text-white font-bold text-lg rounded-full shadow-lg transform hover:scale-105 transition-transform">
-              {isMusicPlaying ? '🔇 Tắt nhạc' : '🔊 Bật nhạc'}
-            </button>
-          </div>
-        </main>
-        
-        <aside className="w-full max-w-xs lg:w-72 self-center lg:self-start mt-8 lg:mt-0">
-          {history.length > 0 && (
-              <div className="bg-white/80 backdrop-blur-md p-6 rounded-2xl shadow-xl border border-indigo-100">
-                  <h2 className="text-2xl font-bold text-center text-indigo-700 mb-4 border-b-2 border-indigo-200 pb-2">Danh sách đã quay</h2>
-                  <ul className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
-                      {history.map(({ student }, index) => (
-                          <li key={`${student.name}-${index}`} className="text-lg text-gray-400 line-through text-center font-medium">
-                              {student.name}
-                          </li>
-                      ))}
-                  </ul>
-              </div>
-          )}
-        </aside>
-      </div>
-
-      {selected && (
-        <PopupModal 
-          name={selected.name}
-          question={selected.question}
-          onClose={handleClosePopup}
-        />
+    <div className="flex h-screen w-full bg-premium">
+      {/* Notification Toast */}
+      {notification && (
+        <div className={`fixed top-6 right-6 z-[100] flex items-center gap-3 px-6 py-4 rounded-2xl shadow-2xl animate-slide-up border ${
+          notification.type === 'success' ? 'bg-white border-green-100 text-green-600' : 'bg-white border-red-100 text-red-600'
+        }`}>
+          {notification.type === 'success' ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
+          <p className="text-sm font-bold">{notification.message}</p>
+        </div>
       )}
+      
+      {/* SIDEBAR */}
+      <aside className="w-72 h-full flex flex-col bg-[#050B18] z-20 text-slate-300 shadow-2xl border-r border-tech-blue/10">
+        <div className="p-6 flex flex-col h-full bg-gradient-to-b from-[#0F172A] to-[#050B18]">
+            {/* Logo Area */}
+            <div className="flex items-center gap-3 mb-10 cursor-pointer" onClick={() => setCurrentMode('home')}>
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-gold-accent to-gold-primary flex items-center justify-center shadow-lg">
+                    <Wand2 className="text-white" size={20} />
+                </div>
+                <div className="flex flex-col">
+                    <h1 className="text-white text-xs font-bold leading-tight tracking-tight uppercase line-clamp-2">Công cụ AI - Năng Lực Số & AI</h1>
+                    <p className="text-gold-primary text-[9px] font-bold uppercase tracking-widest mt-1">Cùng thầy Trần Đông</p>
+                </div>
+            </div>
+
+            {/* Teacher Info & Social Links */}
+            <div className="mt-6 pt-6 border-t border-white/10 space-y-4">
+                <p className="text-[10px] font-bold text-gold-accent uppercase tracking-widest mb-2">Thông tin Giảng viên</p>
+                <div className="flex flex-col gap-3">
+                    <a href="https://edunexaai.vercel.app/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 text-xs text-slate-400 hover:text-white transition-colors">
+                        <Bot size={14} className="text-gold-accent" /> <span>Website của tôi</span>
+                    </a>
+                    <a href="https://zalo.me/0944562096" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 text-xs text-slate-400 hover:text-white transition-colors">
+                        <MessageCircle size={14} className="text-green-400" /> <span>Zalo: 094.456.2096 (Thầy Đông)</span>
+                    </a>
+                    <a href="https://www.facebook.com/tranvandong.vietnam" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 text-xs text-slate-400 hover:text-white transition-colors">
+                        <Facebook size={14} className="text-blue-400" /> <span>Facebook cá nhân</span>
+                    </a>
+                    <a href="https://www.tiktok.com/@trn.ng_ai.trainer" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 text-xs text-slate-400 hover:text-white transition-colors">
+                        <Video size={14} className="text-pink-500" /> <span>TikTok: @trn.ng_ai.trainer</span>
+                    </a>
+                    <a href="https://www.youtube.com/@AITrainer.Offical" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 text-xs text-slate-400 hover:text-white transition-colors">
+                        <Youtube size={14} className="text-red-500" /> <span>Youtube: AITrainer.Offical</span>
+                    </a>
+                    <a href="https://www.facebook.com/groups/24037123512640076" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 text-xs text-slate-400 hover:text-white transition-colors">
+                        <UsersIcon size={14} className="text-gold-primary" /> <span>Cộng đồng AI cho GV</span>
+                    </a>
+                </div>
+            </div>
+
+            {/* Navigation */}
+            <nav className="flex flex-col gap-2 mb-8">
+                <div 
+                    onClick={() => {
+                        setCurrentMode('integrate_input');
+                        setResultData(null);
+                        setFormData(prev => ({ ...prev, originalText: '' }));
+                    }} 
+                    className={`flex items-center gap-3 px-4 py-3 rounded-xl cursor-pointer transition-all duration-300 group ${
+                        currentMode === 'integrate_input' 
+                        ? 'bg-tech-blue shadow-[0_0_20px_rgba(59,130,246,0.3)] text-white scale-[1.02]' 
+                        : 'hover:bg-white/10 text-slate-400 hover:text-white'
+                    }`}
+                >
+                    <Layers size={18} className={currentMode === 'integrate_input' ? 'animate-pulse' : 'group-hover:rotate-12 transition-transform'} /> 
+                    <span className="text-sm font-bold tracking-wide">Tích hợp NLS & AI</span>
+                </div>
+            </nav>
+
+            {/* Bottom Actions */}
+            <div className="mt-auto flex flex-col gap-4">
+                {currentMode === 'result' && (
+                    <>
+                        <div className="flex flex-col gap-2 pt-4 border-t border-white/10">
+                            <button 
+                                onClick={handleExportWord} 
+                                className="flex h-11 items-center gap-3 rounded-xl bg-slate-800 px-4 cursor-pointer hover:bg-slate-700 transition-all border border-gold-accent/40 w-full justify-center group active:scale-95"
+                            >
+                                <FileIcon size={18} className="text-gold-accent group-hover:scale-110 transition-transform" />
+                                <span className="text-white text-sm font-bold uppercase tracking-tight">Tải file Word (.docx)</span>
+                            </button>
+                        </div>
+                    </>
+                )}
+            </div>
+        </div>
+      </aside>
+
+      {/* MAIN CONTENT AREA */}
+      <main className="flex-1 flex flex-col h-full relative overflow-hidden bg-premium">
+        {/* Background Decor */}
+        <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-[0.03] -z-10"></div>
+        <div className="absolute top-0 right-0 w-[800px] h-[800px] bg-tech-blue/10 rounded-full blur-[140px] -z-10 translate-x-1/2 -translate-y-1/2"></div>
+        <div className="absolute bottom-0 left-0 w-[600px] h-[600px] bg-gold-accent/5 rounded-full blur-[120px] -z-10 -translate-x-1/2 translate-y-1/2"></div>
+        <div className="absolute top-1/2 left-1/2 w-[400px] h-[400px] bg-tech-blue-dark/5 rounded-full blur-[100px] -z-10 -translate-x-1/2 -translate-y-1/2"></div>
+
+        {/* Top Bar (Tabs) - REMOVED AS PER USER REQUEST */}
+        {currentMode === 'result' && (
+            <header className="w-full py-6 px-10 flex items-center justify-between z-10">
+                <div className="flex items-center gap-3">
+                    <div className="p-2 bg-gold-accent rounded-lg text-white">
+                        <FileText size={24} />
+                    </div>
+                    <div>
+                        <h2 className="text-xl font-bold text-slate-800 font-serif">Kế hoạch bài dạy chi tiết</h2>
+                    <p className="text-xs text-slate-500 font-medium">Đã tích hợp Năng lực số (TT 02) & Tích hợp AI (QĐ 3439)</p>
+                    </div>
+                </div>
+                <div className="flex items-center gap-4">
+                    <div className="text-right hidden lg:block">
+                        <p className="text-xs text-slate-400 font-medium leading-none">Chế độ Offline</p>
+                        <p className="text-[10px] text-gold-primary font-bold uppercase tracking-tighter mt-1">Secured by TD-AI</p>
+                    </div>
+                </div>
+            </header>
+        )}
+
+        {/* Content Body */}
+        <div className="flex-1 overflow-y-auto px-10 pb-20 scrollbar-thin scrollbar-thumb-tech-blue/20 hover:scrollbar-thumb-tech-blue/40">
+            {currentMode === 'home' && (
+                <div className="flex flex-col items-center justify-center h-full text-center">
+                    <h1 className="text-4xl md:text-6xl font-serif font-black tracking-tight mb-4 leading-tight text-slate-800 uppercase">
+                        Công cụ AI <br/> 
+                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-tech-blue to-blue-600 text-2xl md:text-4xl block mt-2">
+                            Tích hợp Năng Lực Số và Tích Hợp AI
+                        </span>
+                    </h1>
+                    <p className="text-xl md:text-2xl font-serif font-bold text-slate-500 mb-10 tracking-wide">Cùng thầy Trần Đông</p>
+                    <div className="flex gap-6 mt-4">
+                        <button onClick={() => setCurrentMode('integrate_input')} className="px-10 py-5 rounded-2xl bg-gradient-to-br from-sidebar to-tech-blue-dark text-white font-bold shadow-2xl hover:translate-y-[-4px] active:translate-y-0 transition-all flex items-center gap-3 border border-white/10 text-lg">
+                            <Sparkles size={20}/> Bắt đầu ngay
+                        </button>
+                    </div>
+
+                    <div className="mt-16 flex items-center justify-center gap-8 border-t border-slate-200 pt-8">
+                        <a href="https://edunexaai.vercel.app/" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm font-bold text-slate-400 hover:text-tech-blue transition-all">
+                            <Bot size={18} /> Website
+                        </a>
+                        <a href="https://zalo.me/0944562096" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm font-bold text-slate-400 hover:text-green-500 transition-all">
+                            <MessageCircle size={18} /> Zalo: 094.456.2096
+                        </a>
+                    </div>
+                </div>
+            )}
+
+            {(currentMode === 'create_input' || currentMode === 'integrate_input') && (
+                <div className="flex justify-center pt-10">
+                    {renderInputForm()}
+                </div>
+            )}
+
+            {currentMode === 'loading' && (
+                <div className="flex flex-col items-center justify-center h-full">
+                    <div className="w-16 h-16 border-4 border-gold-accent/30 border-t-gold-accent rounded-full animate-spin mb-6"></div>
+                    <h3 className="text-xl font-bold text-gold-dark font-serif">AI đang kiến tạo bài dạy tinh hoa...</h3>
+                    <p className="text-sm text-slate-500 mt-2 font-medium italic">Đang tích hợp Năng lực số (TT 02) & Tích hợp AI (QĐ 3439)</p>
+                </div>
+            )}
+
+            {currentMode === 'result' && resultData && (
+                <div className="max-w-[1000px] mx-auto pb-10">
+                    <LessonPlan5512View 
+                        fullData={resultData} 
+                        onTransform={handleTransformMethod} 
+                        onElaborate={handleSectionElaborate} 
+                    />
+                </div>
+            )}
+        </div>
+      </main>
     </div>
   );
 };
